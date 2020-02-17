@@ -52,6 +52,7 @@ module OS
                 }
             }
 
+            # wait for all io threads' ending
             io_threads.each { |t| t.join }
 
             exit_status = wait_thr.value        # Process::Status object returned.
@@ -65,9 +66,14 @@ module OS
 end
 
 ################################################################
-# main
+# test & usage
 
 if __FILE__ == $0
+    OS.popen3("(echo message) && (echo some error 1>&2)") { |o, e|
+        $log.info   o.chomp if o
+        $log.error  e.chomp if e
+    }
+
     OS.popen3("ping baidu.com") { |o, e|
         $log.info   o.chomp if o
         $log.error  e.chomp if e
