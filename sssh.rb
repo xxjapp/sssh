@@ -1,31 +1,32 @@
 #!/usr/bin/env ruby
 # encoding: utf-8
 #
+# env example:
+# SSSH_LOG_DIR = "/var/log/ruby"
+# SSSH_SSH_CMD = "ssh -vNT -R 23389:localhost:3389 user@example.com -p 22"
+#
 
-require "colorize"
 require "open3"
 
 require_relative "loggingx"
+require_relative "os"
 
-$log ||= LoggingX.get_log File.basename(__FILE__), log_dir: "/var/log/ruby", log_level: :debug
+SSSH_LOG_DIR = ENV["SSSH_LOG_DIR"]
+SSSH_SSH_CMD = ENV["SSSH_SSH_CMD"]
+
+$log ||= LoggingX.get_log File.basename(__FILE__), log_dir: SSSH_LOG_DIR, log_level: :debug
 
 ################################################################
 # module
 
 module Sssh
     def self.start
-        cmd = "ssh -R 20022:localhost:22 localhost -p 22"
-        $log.info cmd.green
+        cmd = SSSH_SSH_CMD
 
         loop {
-            Open3.popen3(cmd) { |stdin, stdout, stderr, wait_thr|
-                pid = wait_thr.pid                  # pid of the started process.
-                $log.info "pid = #{pid}"
-
-                # ...
-
-                exit_status = wait_thr.value        # Process::Status object returned.
-                $log.info "exit_status = #{exit_status}"
+            OS.popen3(cmd) { |o, e|
+                $log.info o.chomp if o
+                $log.error e.chomp if e
             }
         }
     end

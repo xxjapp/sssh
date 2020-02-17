@@ -1,2 +1,3 @@
 # sssh
-sticky ssh
+
+sticky ssh to keep ssh connection
