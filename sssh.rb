@@ -100,10 +100,13 @@ class Sssh
             return
         end
 
-        OS.popen3("taskkill /F /PID #{process_info[:pid]}") { |o, e|
-            $log.info  o.chomp if o
-            $log.error e.chomp if e
-        }
+        $log.info "kill #{process_info[:pid]}"
+
+        begin
+            Process.kill("KILL", process_info[:pid])
+        rescue => exception
+            $log.error exception
+        end
     end
 
     def status_ok? process_info
