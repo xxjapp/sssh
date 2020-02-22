@@ -126,7 +126,6 @@ class Sssh
             return true
         end
 
-        @log.debug "@cmd2 = #{@cmd2}"
         res = `#{@cmd2}`.chomp
 
         if res.to_i >= 2
