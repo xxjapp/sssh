@@ -161,7 +161,7 @@ end
 
 if __FILE__ == $0
     require 'optparse'
-    params = ARGV.getopts nil, "user:", "host:localhost", "port:22", "remote_port:20022", "local_port:22", "ssh_path:C:/cygwin64/bin/ssh.exe", "log_dir:/var/log/ruby", "remote_log_parent_dir:/tmp"
+    params = ARGV.getopts nil, "user:", "host:localhost", "port:22", "remote_port:20022", "local_port:22", "ssh_path:C:/cygwin64/bin/ssh.exe", "log_dir:/var/log/sssh", "remote_log_parent_dir:/tmp"
 
     Logging.mdc['tid'] = LoggingX.get_current_thread_id "main"
     Sssh.new(params).start
