@@ -8,6 +8,8 @@
 #   ruby sssh.rb --host locahost --port 22 --remote_port 20022 --local_port 22
 #
 
+require "date"
+
 require_relative "loggingx"
 require_relative "os"
 
@@ -27,7 +29,7 @@ class Sssh
         @log                    = LoggingX.get_log File.basename(__FILE__), log_dir: @log_dir, log_level: :debug, pattern: "%d %-5l [%X{tid}] (%F:%L) %M - %m\n"
         @cmd                    = "ssh -NT -R #{@remote_port}:localhost:#{@local_port} #{user_at_host} -p #{@port}"         # cmd to create reverse ssh tunneling
         @cmd2                   = "ssh #{user_at_host} -p #{@port} \"netstat -ano | grep :#{@remote_port} | wc -l\""        # cmd to check the created reverse ssh tunneling
-        @cmd3                   = "rsync -avzhe '#{@ssh_path} -p #{@port}' #{cygdrive_path @log_dir} #{user_at_host}:#{@remote_log_parent_dir}" # cmd to rsync log to remote host
+        @cmd3                   = "rsync --delete -avzhe '#{@ssh_path} -p #{@port}' #{cygdrive_path @log_dir} #{user_at_host}:#{@remote_log_parent_dir}" # cmd to rsync log to remote host
 
         @log.info "cmd  = #{@cmd}"
         @log.info "cmd2 = #{@cmd2}"
@@ -144,14 +146,30 @@ class Sssh
             loop {
                 sleep 60
 
-                # NOTE: touch log_dir to force cloud storage service like Dropbox to upload log files
-                FileUtils.touch Dir.glob "#{@log_dir}/*.log"
+                # delete old log files
+                Dir.glob("#{@log_dir}/**/*").older_than_days(90) { |file|
+                    FileUtils.rm(file) if File.file?(file)
+                }
 
                 OS.popen3(@cmd3) { |o, e|
                     @log.info  o.chomp if o
                     @log.error e.chomp if e
                 }
             }
+        }
+    end
+end
+
+################################################################
+# module Enumerable
+
+# SEE: https://stackoverflow.com/a/23250497/1440174
+module Enumerable
+    def older_than_days(days)
+        now = Date.today
+
+        each { |file|
+            yield file if (now - File.stat(file).mtime.to_date) > days
         }
     end
 end
