@@ -5,10 +5,14 @@
 #   ruby sssh.rb --help
 #
 # Example:
-#   ruby sssh.rb --host locahost --port 22 --remote_port 20022 --local_port 22
+#   ruby sssh.rb --host localhost --port 22 --tunnels "{20022: 22, 23389: 3389}"
+#
+# Note:
+#   --tunnels use simplified json format
 #
 
 require "date"
+require "json"
 
 require_relative "loggingx"
 require_relative "os"
@@ -18,22 +22,23 @@ require_relative "os"
 
 class Sssh
     def initialize params
+        # params to ssh remote host
         @user                   = params["user"]
         @host                   = params["host"]
         @port                   = params["port"]
-        @remote_port            = params["remote_port"]
-        @local_port             = params["local_port"]
+
+        # params to create tunnels
+        @tunnels                = JSON.parse params["tunnels"].gsub /(\w+)/, '"\1"'
+
+        # params to rsync log files to remote host
         @ssh_path               = params["ssh_path"]
         @log_dir                = params["log_dir"]
         @remote_log_parent_dir  = params["remote_log_parent_dir"]
-        @log                    = LoggingX.get_log File.basename(__FILE__), log_dir: @log_dir, log_level: :debug, pattern: "%d %-5l [%X{tid}] (%F:%L) %M - %m\n"
-        @cmd                    = "ssh -NT -R #{@remote_port}:localhost:#{@local_port} #{user_at_host} -p #{@port}"         # cmd to create reverse ssh tunneling
-        @cmd2                   = "ssh #{user_at_host} -p #{@port} \"netstat -ano | grep :#{@remote_port} | wc -l\""        # cmd to check the created reverse ssh tunneling
-        @cmd3                   = "rsync --delete -avzhe '#{@ssh_path} -p #{@port}' #{cygdrive_path @log_dir} #{user_at_host}:#{@remote_log_parent_dir}" # cmd to rsync log to remote host
 
-        @log.info "cmd  = #{@cmd}"
-        @log.info "cmd2 = #{@cmd2}"
-        @log.info "cmd3 = #{@cmd3}"
+        # hash of remote_port to process info
+        @process_info           = {}
+
+        @log                    = LoggingX.get_log File.basename(__FILE__), log_dir: @log_dir, log_level: :debug, pattern: "%d %-5l [%X{tid}] (%F:%L) %M - %m\n"
     end
 
     def user_at_host
@@ -44,17 +49,44 @@ class Sssh
         "/cygdrive/" + path.sub(/^(\w):/, "\\1")
     end
 
+    # cmd to create ssh tunnels
+    def tunnel_cmd remote_port, local_port
+        "ssh -NT -R #{remote_port}:localhost:#{local_port} #{user_at_host} -p #{@port}"
+    end
+
+    # cmd to check the created ssh tunnels
+    def check_cmd remote_port
+        "ssh #{user_at_host} -p #{@port} \"netstat -ano | grep :#{remote_port} | wc -l\""
+    end
+
+    # cmd to rsync log to remote host
+    def sync_cmd
+        "rsync --delete -avzhe '#{@ssh_path} -p #{@port}' #{cygdrive_path @log_dir} #{user_at_host}:#{@remote_log_parent_dir}"
+    end
+
     def start
-        start_monitor
-        start_rsync_log_file
+        threads = [start_rsync_log_file]
 
-        loop {
-            OS.popen3(@cmd, listener: self) { |o, e|
-                @log.info  o.chomp if o
-                @log.error e.chomp if e
+        @tunnels.each { |remote_port, local_port|
+            threads << start_tunnel(remote_port, local_port)
+            threads << start_monitor(remote_port)
+        }
+
+        threads.each { |t| t.join }
+    end
+
+    def start_tunnel remote_port, local_port
+        Thread.new {
+            Logging.mdc['tid'] = LoggingX.get_current_thread_id "tunnel"
+
+            loop {
+                OS.popen3(tunnel_cmd(remote_port, local_port), listener: self, user_data: remote_port) { |o, e|
+                    @log.info  o.chomp if o
+                    @log.error e.chomp if e
+                }
+
+                wait_interval Time.now - @process_info[remote_port][:start_time]
             }
-
-            wait_interval Time.now - @process_info[:start_time]
         }
     end
 
@@ -64,71 +96,72 @@ class Sssh
         sleep interval
     end
 
-    def on_start wait_thr
+    def on_start wait_thr, remote_port
         # started process info
-        @process_info = {
+        @process_info[remote_port] = {
+            remote_port:    remote_port,
             pid:            wait_thr.pid,		# pid of the started process.
             start_time:     Time.now,
             status:         :start
         }
 
-        @log.debug "@process_info = #{@process_info}"
+        @log.debug "@process_info[#{remote_port}] = #{@process_info[remote_port]}"
     end
 
-    def on_end wait_thr
-        @process_info.merge!({
+    def on_end wait_thr, remote_port
+        @process_info[remote_port].merge!({
             exit_status:    wait_thr.value,	    # Process::Status object returned.
             end_time:       Time.now,
             status:         :end
         })
 
-        @log.debug "@process_info = #{@process_info}"
+        @log.debug "@process_info[#{remote_port}] = #{@process_info[remote_port]}"
     end
 
     def on_start_read key
         Logging.mdc['tid'] = LoggingX.get_current_thread_id key.to_s
     end
 
-    def start_monitor
+    def start_monitor remote_port
         Thread.new {
             Logging.mdc['tid'] = LoggingX.get_current_thread_id "monitor"
 
             loop {
                 sleep 60
 
-                process_info = @process_info
-                kill_current_connection process_info if !status_ok? process_info
+                pinfo = @process_info[remote_port]
+                kill_current_connection pinfo if !status_ok? pinfo
             }
         }
     end
 
-    def kill_current_connection process_info
-        if process_info[:status] == :end
+    def kill_current_connection pinfo
+        if pinfo[:status] == :end
             @log.debug "Already end"
             return
         end
 
-        @log.info "kill #{process_info[:pid]}"
+        @log.info "kill #{pinfo[:pid]}"
 
         begin
-            Process.kill("KILL", process_info[:pid])
+            Process.kill("KILL", pinfo[:pid])
         rescue => exception
             @log.error exception
         end
     end
 
-    def status_ok? process_info
-        if process_info[:status] == :end
+    def status_ok? pinfo
+        if pinfo[:status] == :end
             @log.debug "Already end"
             return true
         end
 
-        if Time.now - process_info[:start_time] < 60
+        if Time.now - pinfo[:start_time] < 60
             @log.debug "Started less then one minute, wait and see..."
             return true
         end
 
-        res = `#{@cmd2}`.chomp
+        res = `#{check_cmd pinfo[:remote_port]}`.chomp
 
         if res.to_i >= 2
             @log.info  "#{res} (OK)"
@@ -151,7 +184,7 @@ class Sssh
                     FileUtils.rm(file) if File.file?(file)
                 }
 
-                OS.popen3(@cmd3) { |o, e|
+                OS.popen3(sync_cmd) { |o, e|
                     @log.info  o.chomp if o
                     @log.error e.chomp if e
                 }
@@ -179,7 +212,14 @@ end
 
 if __FILE__ == $0
     require 'optparse'
-    params = ARGV.getopts nil, "user:", "host:localhost", "port:22", "remote_port:20022", "local_port:22", "ssh_path:C:/cygwin64/bin/ssh.exe", "log_dir:/var/log/sssh", "remote_log_parent_dir:/tmp"
+    params = ARGV.getopts nil,
+        "user:",
+        "host:localhost",
+        "port:22",
+        "tunnels:{20022: 22, 23389: 3389}",
+        "ssh_path:C:/cygwin64/bin/ssh.exe",
+        "log_dir:C:/var/log/sssh",
+        "remote_log_parent_dir:/tmp"
 
     Logging.mdc['tid'] = LoggingX.get_current_thread_id "main"
     Sssh.new(params).start

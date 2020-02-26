@@ -11,14 +11,14 @@ require "open3"
 module OS
     # block => |o, e|
     # return all output and error if no block given otherwise empty string
-    def self.popen3(cmd, listener: nil, &block)
+    def self.popen3(cmd, listener: nil, user_data: nil, &block)
         output      = ''
         error       = ''
         io_threads  = []
 
         # see: http://stackoverflow.com/a/1162850/83386
         Open3.popen3(cmd) { |stdin, stdout, stderr, wait_thr|
-            listener.send(:on_start, wait_thr) if listener && listener.respond_to?(:on_start)
+            listener.send(:on_start, wait_thr, user_data) if listener && listener.respond_to?(:on_start)
 
             # stdin not supported
             stdin.close
@@ -50,7 +50,7 @@ module OS
             # wait for all io threads' ending
             io_threads.each { |t| t.join }
 
-            listener.send(:on_end, wait_thr) if listener && listener.respond_to?(:on_end)
+            listener.send(:on_end, wait_thr, user_data) if listener && listener.respond_to?(:on_end)
         }
 
         return [output, error]
@@ -67,7 +67,7 @@ if __FILE__ == $0
     }
 
     class Listener
-        def on_start wait_thr
+        def on_start wait_thr, user_data
             puts
             puts "pid = #{wait_thr.pid}"
         end
