@@ -180,7 +180,7 @@ class Sssh
                 sleep 60
 
                 # delete old log files
-                Dir.glob("#{@log_dir}/**/*").older_than_days(90) { |file|
+                Dir.glob("#{@log_dir}/**/*").older_than_days(7) { |file|
                     FileUtils.rm(file) if File.file?(file)
                 }
 
